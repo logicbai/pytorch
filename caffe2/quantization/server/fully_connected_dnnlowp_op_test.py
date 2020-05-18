@@ -7,9 +7,10 @@ import hypothesis.strategies as st
 import numpy as np
 from caffe2.python import core, dyndep, workspace
 from caffe2.quantization.server import utils as dnnlowp_utils
-from dnnlowp_test_utils import (
+from caffe2.quantization.server.dnnlowp_test_utils import (
     avoid_vpmaddubsw_overflow_fc,
     check_quantized_results_close,
+    run_conv_or_fc,
 )
 from hypothesis import given
 
@@ -23,11 +24,15 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
     @given(
         input_channels=st.sampled_from([3, 4, 5, 8, 16, 32]),
         output_channels=st.integers(2, 16),
-        batch_size=st.integers(1, 16),
+        batch_size=st.integers(0, 16),
         in_quantized=st.booleans(),
         out_quantized=st.booleans(),
         weight_quantized=st.booleans(),
         prepack_weight=st.booleans(),
+        preserve_activation_sparsity=st.booleans(),
+        preserve_weight_sparsity=st.booleans(),
+        fuse_relu=st.booleans(),
+        output_packed_bias=st.booleans(),
         **hu.gcs_cpu_only
     )
     def test_dnnlowp_fully_connected_int(
@@ -39,11 +44,15 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
         out_quantized,
         weight_quantized,
         prepack_weight,
+        preserve_activation_sparsity,
+        preserve_weight_sparsity,
+        fuse_relu,
+        output_packed_bias,
         gc,
         dc,
     ):
         # X and W have scale 1, so exactly represented after quantization
-        X_min = -77
+        X_min = 0 if preserve_activation_sparsity else -77
         X_max = X_min + 255
         X = np.round(
             np.random.rand(batch_size, input_channels) * (X_max - X_min) + X_min
@@ -52,10 +61,15 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
         # input channels 0 and 1 are all X_min to avoid overflow from vpmaddubsw
         # when multiplied with W_min and W_max
         X[:, 0] = X_min
-        X[0, 1] = X_max
+        if batch_size != 0:
+            X[0, 1] = X_max
 
-        W_min = -100
-        W_max = W_min + 255
+        if preserve_weight_sparsity:
+            W_min = -128
+            W_max = 100
+        else:
+            W_min = -100
+            W_max = W_min + 255
         W = np.round(
             np.random.rand(output_channels, input_channels) * (W_max - W_min) + W_min
         )
@@ -82,12 +96,15 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
         Output = collections.namedtuple("Output", ["Y", "op_type", "engine"])
         outputs = []
 
-        op_engine_list = [
-            ("FC", ""),
-            ("FC", "DNNLOWP"),
-            ("FC", "DNNLOWP_16"),
-            ("Int8FC", "DNNLOWP"),
-        ]
+        op_engine_list = [("FC", "")]
+        if fuse_relu:
+            op_engine_list += [("Int8FCRelu", "DNNLOWP")]
+        else:
+            op_engine_list += [
+                ("FC", "DNNLOWP"),
+                ("FC", "DNNLOWP_16"),
+                ("Int8FC", "DNNLOWP"),
+            ]
 
         for op_type, engine in op_engine_list:
             init_net = core.Net("test_init_net")
@@ -102,14 +119,24 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
 
             if do_quantize:
                 quantize = core.CreateOperator(
-                    "Quantize", ["X"], ["X_q"], engine=engine, device_option=gc
+                    "Quantize",
+                    ["X"],
+                    ["X_q"],
+                    preserve_activation_sparsity=preserve_activation_sparsity,
+                    engine=engine,
+                    device_option=gc,
                 )
                 net.Proto().op.extend([quantize])
 
-            x_q_param = dnnlowp_utils.choose_quantization_params(X.min(), X.max())
+            X_min = 0 if X.size == 0 else X.min()
+            X_max = 0 if X.size == 0 else X.max()
+            x_q_param = dnnlowp_utils.choose_quantization_params(
+                X_min, X_max, preserve_activation_sparsity
+            )
+            w_q_param = None
             if do_quantize_weight:
                 int8_given_tensor_fill, w_q_param = dnnlowp_utils.create_int8_given_tensor_fill(
-                    W, "W_q"
+                    W, "W_q", preserve_weight_sparsity
                 )
                 init_net.Proto().op.extend([int8_given_tensor_fill])
 
@@ -126,7 +153,8 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
                 pack = core.CreateOperator(
                     "Int8FCPackWeight",
                     inputs,
-                    ["W_packed"],
+                    ["W_packed", "B_q32"] if do_dequantize and output_packed_bias else ["W_packed"],
+                    preserve_weight_sparsity=preserve_weight_sparsity,
                     in_scale=x_q_param.scale,
                     engine=engine,
                 )
@@ -143,6 +171,8 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
                 ],
                 ["Y_q" if do_dequantize else "Y"],
                 dequantize_output=not do_dequantize,
+                preserve_activation_sparsity=preserve_activation_sparsity,
+                preserve_weight_sparsity=preserve_weight_sparsity,
                 engine=engine,
                 device_option=gc,
             )
@@ -151,8 +181,12 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
                 # output dynamically by looking at the range of output of each
                 # batch, so here we provide the range of output observed from
                 # fp32 reference implementation
-                dnnlowp_utils.add_quantization_param_args(fc, outputs[0][0])
+                dnnlowp_utils.add_quantization_param_args(
+                    fc, outputs[0][0], preserve_activation_sparsity
+                )
             net.Proto().op.extend([fc])
+            if fuse_relu and "DNNLOWP" not in engine:
+                net.Relu(["Y"], "Y")
 
             if do_dequantize:
                 dequantize = core.CreateOperator(
@@ -160,13 +194,14 @@ class DNNLowPFullyConnectedOpTest(hu.HypothesisTestCase):
                 )
                 net.Proto().op.extend([dequantize])
 
-            self.ws.create_blob("X").feed(X, device_option=gc)
-            self.ws.create_blob("W").feed(W, device_option=gc)
-            self.ws.create_blob("b").feed(b, device_option=gc)
-            self.ws.run(init_net)
-            self.ws.run(net)
-            outputs.append(
-                Output(Y=self.ws.blobs["Y"].fetch(), op_type=op_type, engine=engine)
+            run_conv_or_fc(
+                self, init_net, net, X, W, b, op_type, engine, None, gc, outputs
             )
 
-        check_quantized_results_close(outputs)
+            if output_packed_bias and do_prepack_weight and do_dequantize:
+                bias_int32 = self.ws.blobs["B_q32"].fetch()
+                if do_quantize_weight:
+                    np.testing.assert_equal(bias_int32[0], np.round(b / (x_q_param.scale * w_q_param.scale)))
+                np.testing.assert_equal(bias_int32[0].dtype, np.int32)
+
+        check_quantized_results_close(outputs, symmetric=preserve_activation_sparsity)

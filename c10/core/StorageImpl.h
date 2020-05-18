@@ -2,7 +2,6 @@
 
 #include <c10/core/Allocator.h>
 #include <c10/core/ScalarType.h>
-#include <c10/core/ScalarTypeUtils.h>
 
 #include <c10/util/intrusive_ptr.h>
 
@@ -10,43 +9,46 @@ namespace c10 {
 
 struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
  public:
+  struct use_byte_size_t {};
+
   StorageImpl(
+      use_byte_size_t use_byte_size,
       caffe2::TypeMeta data_type,
-      int64_t numel,
+      size_t size_bytes,
       at::DataPtr data_ptr,
       at::Allocator* allocator,
       bool resizable)
       : data_type_(data_type),
         data_ptr_(std::move(data_ptr)),
-        numel_(numel),
+        size_bytes_(size_bytes),
         resizable_(resizable),
+        received_cuda_(false),
         allocator_(allocator) {
-    if (numel > 0) {
+    if (resizable) {
+      AT_ASSERTM(
+          allocator_, "For resizable storage, allocator must be provided");
+    }
+    if (size_bytes > 0) {
       if (data_type_.id() == caffe2::TypeIdentifier::uninitialized()) {
         AT_ERROR(
-            "Constructing a storage with meta of unknown type and non-zero numel");
+            "Constructing a storage with meta of unknown type and non-zero size");
       }
     }
   }
 
   StorageImpl(
+      use_byte_size_t use_byte_size,
       caffe2::TypeMeta data_type,
-      int64_t numel,
+      size_t size_bytes,
       at::Allocator* allocator,
       bool resizable)
       : StorageImpl(
+            use_byte_size_t(),
             data_type,
-            numel,
-            allocator->allocate(data_type.itemsize() * numel),
+            size_bytes,
+            allocator->allocate(size_bytes),
             allocator,
             resizable) {}
-
-  explicit StorageImpl(at::Device device)
-      : StorageImpl(device, caffe2::TypeMeta()) {}
-
-  StorageImpl(at::Device device, caffe2::TypeMeta data_type)
-      : StorageImpl(data_type, 0, at::DataPtr(nullptr, device), nullptr, true) {
-  }
 
   StorageImpl& operator=(StorageImpl&& other) = default;
   StorageImpl& operator=(const StorageImpl&) = delete;
@@ -57,7 +59,7 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
 
   void reset() {
     data_ptr_.clear();
-    numel_ = 0;
+    size_bytes_ = 0;
   }
 
   template <typename T>
@@ -67,15 +69,13 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
 
   template <typename T>
   inline T* data() const {
-    // TODO: This is bad: it means storage.data<T>() calls only work on
-    // T that are valid ScalarType.  FIXME!
-    auto data_type_T = at::scalarTypeToDataType(c10::CTypeToScalarType<T>::to());
-    if (dtype().id() != data_type_T) {
+    auto data_type = caffe2::TypeMeta::Make<T>();
+    if (dtype() != data_type) {
       AT_ERROR(
           "Attempt to access StorageImpl having data type ",
-          dtype().id(),
+          dtype(),
           " as data type ",
-          data_type_T);
+          data_type);
     }
     return unsafe_data<T>();
   }
@@ -89,22 +89,14 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
     data_ptr_.clear();
   }
 
-  size_t itemsize() const {
-    return data_type_.itemsize();
+  size_t nbytes() const {
+    return size_bytes_;
   }
-
-  size_t capacity() const {
-    return numel_ * itemsize();
-  }
-
-  int64_t numel() const {
-    return numel_;
-  };
 
   // TODO: remove later
-  void set_numel(int64_t numel) {
-    numel_ = numel;
-  };
+  void set_nbytes(size_t size_bytes) {
+    size_bytes_ = size_bytes;
+  }
 
   bool resizable() const {
     return resizable_;
@@ -128,9 +120,7 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
   // Setting the data_type will require you to audit many other parts of the
   // struct again to make sure it's still valid.
   void set_dtype(const caffe2::TypeMeta& data_type) {
-    int64_t capacity = numel_ * data_type_.itemsize();
     data_type_ = data_type;
-    numel_ = capacity / data_type_.itemsize();
   }
 
   // TODO: Return const ptr eventually if possible
@@ -171,6 +161,10 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
   }
 
   void set_resizable(bool resizable) {
+    if (resizable) {
+      // We need an allocator to be resizable
+      AT_ASSERT(allocator_);
+    }
     resizable_ = resizable;
   }
 
@@ -180,10 +174,10 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
   void UniqueStorageShareExternalPointer(
       void* src,
       const caffe2::TypeMeta& data_type,
-      size_t capacity,
+      size_t size_bytes,
       DeleterFnPtr d = nullptr) {
     UniqueStorageShareExternalPointer(
-        at::DataPtr(src, src, d, data_ptr_.device()), data_type, capacity);
+        at::DataPtr(src, src, d, data_ptr_.device()), data_type, size_bytes);
   }
 
   /**
@@ -192,7 +186,7 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
   void UniqueStorageShareExternalPointer(
       at::DataPtr&& data_ptr,
       const caffe2::TypeMeta& data_type,
-      size_t capacity) {
+      size_t size_bytes) {
     data_type_ = data_type;
     // TODO: Use CAFFE_ENFORCE_WITH_CALLER equivalent
     // For now causes lots of redefine issues if caffe2/core/logging.h is used
@@ -202,19 +196,29 @@ struct C10_API StorageImpl final : public c10::intrusive_ptr_target {
           "already set.");
     }
     data_ptr_ = std::move(data_ptr);
-    // NOTE: data_type might change and so it's also possible that capacity
-    // might not be divisible by itemsize. There is no way for us to keep track
-    // of the exact capacity if we're not explicity storing is. More conrectely
-    // capacity() might not return the value that was set here, if itemsize does
-    // not evenly divide it.
-    numel_ = capacity / data_type_.itemsize();
+    size_bytes_ = size_bytes;
+    allocator_ = nullptr;
+    resizable_ = false;
+  }
+
+  // This method can be used only after storage construction and cannot be used
+  // to modify storage status
+  void set_received_cuda(bool received_cuda) {
+    received_cuda_ = received_cuda;
+  }
+
+  bool received_cuda() {
+    return received_cuda_;
   }
 
  private:
   caffe2::TypeMeta data_type_;
   DataPtr data_ptr_;
-  int64_t numel_;
+  size_t size_bytes_;
   bool resizable_;
+  // Identifies that Storage was received from another process and doesn't have
+  // local to process cuda memory allocation
+  bool received_cuda_;
   Allocator* allocator_;
 };
 } // namespace c10

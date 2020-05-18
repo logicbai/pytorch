@@ -1,14 +1,30 @@
 # The Tensor classes are added to this module by python_tensor.cpp
+from typing import Optional, Tuple
+
 import torch
+from torch import Tensor
+
+# A workaround to support both TorchScript and MyPy:
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from torch import dtype as DType
+else:
+    DType = int
+# TODO: replace the above with
+# from torch.types import _dtype as DType
+
 
 __all__ = [
     'addmm',
     'mm',
     'sum',
+    'softmax',
+    'log_softmax',
 ]
 
 
 def addmm(mat, mat1, mat2, beta=1, alpha=1):
+    # type: (Tensor, Tensor, Tensor, float, float) -> Tensor
     r"""
     This function does exact same thing as :func:`torch.addmm` in the forward,
     except that it supports backward for sparse matrix :attr:`mat1`. :attr:`mat1`
@@ -68,14 +84,15 @@ def mm(mat1, mat2):
 
 
 def sum(input, dim=None, dtype=None):
+    # type: (Tensor, Optional[Tuple[int]], Optional[int]) -> Tensor
     r"""
     Returns the sum of each row of SparseTensor :attr:`input` in the given
-    dimensions :attr:`dim`. If :attr::`dim` is a list of dimensions,
+    dimensions :attr:`dim`. If :attr:`dim` is a list of dimensions,
     reduce over all of them. When sum over all ``sparse_dim``, this method
     returns a Tensor instead of SparseTensor.
 
     All summed :attr:`dim` are squeezed (see :func:`torch.squeeze`), resulting an output
-    tensor having :attr::`dim` fewer dimensions than :attr:`input`.
+    tensor having :attr:`dim` fewer dimensions than :attr:`input`.
 
     During backward, only gradients at ``nnz`` locations of :attr:`input`
     will propagate back. Note that the gradients of :attr:`input` is coalesced.
@@ -123,12 +140,56 @@ def sum(input, dim=None, dtype=None):
         tensor([-2.6596, -1.1450])
     """
     if dtype is None:
-        if dim:
+        if dim is not None:
             return torch._sparse_sum(input, dim)
         else:
             return torch._sparse_sum(input)
     else:
-        if dim:
+        if dim is not None:
             return torch._sparse_sum(input, dim, dtype=dtype)
         else:
             return torch._sparse_sum(input, dtype=dtype)
+
+
+def softmax(input: Tensor, dim: int, dtype: Optional[DType] = None) -> Tensor:
+    r"""Applies a softmax function.
+
+    Softmax is defined as:
+
+    :math:`\text{Softmax}(x_{i}) = \frac{exp(x_i)}{\sum_j exp(x_j)}`
+
+    where :math:`i, j` run over sparse tensor indicies and unspecified
+    entries are ignores. This is equivalent to defining unspecifed
+    entries as negative infinity so that :max:`exp(x_k) = 0` when the
+    entry with index :math:`k` has not specified.
+
+    It is applied to all slices along `dim`, and will re-scale them so
+    that the elements lie in the range `[0, 1]` and sum to 1.
+
+    Arguments:
+        input (Tensor): input
+        dim (int): A dimension along which softmax will be computed.
+        dtype (:class:`torch.dtype`, optional): the desired data type
+          of returned tensor.  If specified, the input tensor is
+          casted to :attr:`dtype` before the operation is
+          performed. This is useful for preventing data type
+          overflows. Default: None
+    """
+    return torch._sparse_softmax(input, dim, dtype=dtype)
+
+
+def log_softmax(input: Tensor, dim: int, dtype: Optional[DType] = None) -> Tensor:
+    r"""Applies a softmax function followed by logarithm.
+
+    See :class:`~torch.sparse.softmax` for more details.
+
+    Arguments:
+        input (Tensor): input
+        dim (int): A dimension along which softmax will be computed.
+        dtype (:class:`torch.dtype`, optional): the desired data type
+          of returned tensor.  If specified, the input tensor is
+          casted to :attr:`dtype` before the operation is
+          performed. This is useful for preventing data type
+          overflows. Default: None
+    """
+    return torch._sparse_log_softmax(input, dim, dtype=dtype)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ATen/Allocator.h>
+#include <c10/core/Allocator.h>
 #include <ATen/core/Generator.h>
 #include <c10/util/Exception.h>
 
@@ -34,7 +34,7 @@ struct CAFFE2_API HIPHooksInterface {
     AT_ERROR("Cannot initialize HIP without ATen_hip library.");
   }
 
-  virtual std::unique_ptr<Generator> initHIPGenerator(Context*) const {
+  virtual std::unique_ptr<c10::GeneratorImpl> initHIPGenerator(Context*) const {
     AT_ERROR("Cannot initialize HIP generator without ATen_hip library.");
   }
 

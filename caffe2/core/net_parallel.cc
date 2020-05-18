@@ -19,9 +19,7 @@ ParallelNet::ParallelNet(
   CAFFE_ENFORCE_GT(
       num_workers_, 0, "Expected positive number of worker threads");
 
-  helper_ = caffe2::make_unique<ParallelNetExecutorHelper>(this);
-  task_graph_ = TaskGraphRegistry()->Create(
-      FLAGS_caffe2_task_graph_engine, helper_.get(), options_);
+  helper_ = std::make_unique<ParallelNetExecutorHelper>(this);
 
   // initialize operators
   operator_nodes_ = dag_utils::prepareOperatorNodes(net_def, ws);
@@ -31,6 +29,10 @@ ParallelNet::ParallelNet(
     op->SetExecutorHelper(helper_.get());
     operators_.push_back(op);
   }
+
+  task_graph_ = TaskGraphRegistry()->Create(
+      FLAGS_caffe2_task_graph_engine, helper_.get(), options_);
+  CAFFE_ENFORCE(task_graph_, "Couldn't initialize task graph");
 
   // compute chains
   // TODO: inference mode for chaining
@@ -59,7 +61,7 @@ ParallelNet::ParallelNet(
   }
 
   // initialize task graph
-  for (auto chain_id = 0; chain_id < chains.size(); ++chain_id) {
+  for (auto chain_id = 0U; chain_id < chains.size(); ++chain_id) {
     std::vector<OperatorBase*> ops;
     ops.reserve(chains[chain_id].size());
     for (auto op_id : chains[chain_id]) {
@@ -67,7 +69,7 @@ ParallelNet::ParallelNet(
     }
     CAFFE_ENFORCE(task_graph_->CreateNode(chain_id, ops));
   }
-  for (auto chain_id = 0; chain_id < chain_nodes.size(); ++chain_id) {
+  for (auto chain_id = 0U; chain_id < chain_nodes.size(); ++chain_id) {
     if (!chain_nodes[chain_id].parents_.empty()) {
       CAFFE_ENFORCE(
           task_graph_->AddDependency(chain_id, chain_nodes[chain_id].parents_));
@@ -130,7 +132,7 @@ TaskThreadPoolBase* ParallelNet::poolGetter(
   std::unique_lock<std::mutex> pools_lock(pools_mutex_);
   auto pool = pools[device_id][pool_size];
   if (!pool) {
-    pool = ThreadPoolRegistry()->Create(
+    pool = c10::ThreadPoolRegistry()->Create(
         DeviceTypeName(device_type),
         device_id,
         pool_size,

@@ -14,15 +14,19 @@ class CAFFE2_API AsyncSchedulingNet : public AsyncNetBase {
 
   void Wait() override;
 
+  void Cancel() override;
+
  protected:
   bool RunAsync() override;
 
   void pollAndSchedule(int task_id);
-  void schedule(int task_id, bool run_inline = false);
+  void schedule(int task_id, bool run_inline = false) noexcept;
   void reset() override;
   virtual void finishRun();
   void parentCallback(int parent_id);
   bool isInlineTask(int parent_id, int child_id) const;
+
+  void CancelAndFinishAsyncTasks();
 
   std::mutex running_mutex_;
   std::condition_variable running_cv_;

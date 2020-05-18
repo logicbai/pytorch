@@ -17,4 +17,13 @@ typedef struct THC_CLASS THCDescBuff
 #include <THC/generic/THCTensor.h>
 #include <THC/THCGenerateAllTypes.h>
 
+#include <THC/generic/THCTensor.h>
+#include <THC/THCGenerateComplexTypes.h>
+
+#include <THC/generic/THCTensor.h>
+#include <THC/THCGenerateBoolType.h>
+
+#include <THC/generic/THCTensor.h>
+#include <THC/THCGenerateBFloat16Type.h>
+
 #endif

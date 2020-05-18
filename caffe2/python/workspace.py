@@ -25,6 +25,7 @@ import caffe2.python._import_c_extension as C
 logger = logging.getLogger(__name__)
 
 Blobs = C.blobs
+ResetBlob = C.reset_blob
 CreateBlob = C.create_blob
 CurrentWorkspace = C.current_workspace
 DeserializeBlob = C.deserialize_blob
@@ -36,14 +37,16 @@ SwitchWorkspace = C.switch_workspace
 RootFolder = C.root_folder
 Workspaces = C.workspaces
 BenchmarkNet = C.benchmark_net
+BenchmarkNetOnce = C.benchmark_net_once
 GetStats = C.get_stats
 
 operator_tracebacks = defaultdict(dict)
 
 is_asan = C.is_asan
-has_gpu_support = C.has_gpu_support
+has_cuda_support = C.has_cuda_support
 has_hip_support = C.has_hip_support
-if has_gpu_support:
+has_gpu_support = C.has_gpu_support
+if has_cuda_support:
     GpuDeviceType = caffe2_pb2.CUDA
     NumCudaDevices = C.num_cuda_devices
     # This is a duplicate of NumCudaDevices. Remove
@@ -56,6 +59,7 @@ if has_gpu_support:
         return np.asarray(C.get_cuda_peer_access_pattern())
 
     GetDeviceProperties = C.get_device_properties
+    GetGPUMemoryInfo = C.get_gpu_memory_info
 else:
     NumCudaDevices = lambda: 0 # noqa
     GetCUDAVersion = lambda: 0 # noqa
@@ -68,19 +72,26 @@ if has_hip_support:
     def GetGpuPeerAccessPattern():
         return np.asarray(C.get_hip_peer_access_pattern())
     GetDeviceProperties = C.get_device_properties
+    GetGPUMemoryInfo = C.get_gpu_memory_info
 
-if not has_gpu_support and not has_hip_support:
+if not has_gpu_support:
     # setting cuda as the default GpuDeviceType as some tests
     # like core, scope tests use GpuDeviceType even without gpu support
     GpuDeviceType = caffe2_pb2.CUDA
     NumGpuDevices = lambda: 0 # noqa
     GetDeviceProperties = lambda x: None # noqa
     GetGpuPeerAccessPattern = lambda: np.array([]) # noqa
+    GetGPUMemoryInfo = lambda: None # noqa
 
 IsNUMAEnabled = C.is_numa_enabled
 GetNumNUMANodes = C.get_num_numa_nodes
 GetBlobNUMANode = C.get_blob_numa_node
 GetBlobSizeBytes = C.get_blob_size_bytes
+
+
+def FillRandomNetworkInputs(net, input_dims, input_types):
+    C.fill_random_network_inputs(net.Proto().SerializeToString(), input_dims, input_types)
+
 
 def _GetFreeFlaskPort():
     """Get a free flask port."""
@@ -184,12 +195,20 @@ def RunOperatorOnce(operator):
     return C.run_operator_once(StringifyProto(operator))
 
 
+def RunOperatorMultiple(operator, num_runs):
+    return C.run_operator_multiple(StringifyProto(operator), num_runs)
+
+
 def RunOperatorsOnce(operators):
     for op in operators:
         success = RunOperatorOnce(op)
         if not success:
             return False
     return True
+
+
+def ClearGlobalNetObserver():
+    return C.clear_global_net_observer()
 
 
 def CallWithExceptionIntercept(func, op_id_fetcher, net_name, *args, **kwargs):
@@ -363,6 +382,11 @@ def FetchBlob(name):
     return result
 
 
+def FetchTorch(name):
+    ws = C.Workspace.current
+    return ws.blobs[name].to_torch()
+
+
 Int8Tensor = collections.namedtuple(
     'Int8Tensor', ['data', 'scale', 'zero_point']
 )
@@ -370,7 +394,7 @@ Int8Tensor = collections.namedtuple(
 
 def FetchInt8Blob(name):
     """Fetches an Int8 blob from the workspace. It shared backend implementation
-    with FetchBlob but it is recommened when fetching Int8 Blobs
+    with FetchBlob but it is recommended when fetching Int8 Blobs
 
     Inputs:
       name: the name of the Int8 blob - a string or a BlobReference
@@ -405,7 +429,7 @@ def FetchInt8BlobRealVal(name):
 
 def _Workspace_fetch_int8_blob(ws, name):
     """Fetches an Int8 blob from the workspace. It shared backend implementation
-    with FetchBlob but it is recommened when fetching Int8 Blobs
+    with FetchBlob but it is recommended when fetching Int8 Blobs
 
     Inputs:
       name: the name of the Int8 blob - a string or a BlobReference
@@ -700,13 +724,45 @@ Workspace.run = _Workspace_run
 Workspace.feed_blob = _Workspace_feed_blob
 Workspace.remove_blob = _Workspace_remove_blob
 
-
 # C.Blob methods.
 
+
 def _Blob_feed(blob, arg, device_option=None):
+    # conservative type check to avoid unnecessary import
+    if type(arg).__name__ == 'Tensor' and type(arg).__module__ == 'torch':
+        import torch
+        if isinstance(arg, torch.Tensor):
+            assert device_option is None, \
+                "device_option doesn't make sense with PyTorch tensors"
+            handle = torch._C._tensor_impl_raw_handle(arg)
+            blob._wrap_tensor_impl(handle)
+            return True  # _feed() returns True for some reason
     if device_option is not None:
         device_option = StringifyProto(device_option)
     return blob._feed(arg, device_option)
 
 
 C.Blob.feed = _Blob_feed
+
+
+def _Tensor_to_torch(tensor):
+    """
+    PyTorch tensor interop (TensorCPU methods)
+
+    Can be accessed as:
+      workspace.Workspace.current.blobs['foo'].tensor().to_torch()
+    """
+    # avoiding circular dependency
+    import torch
+    handle = tensor._tensor_impl_raw_handle()
+    return torch._C._wrap_tensor_impl(handle)
+
+C.TensorCPU.to_torch = _Tensor_to_torch
+
+
+def _Blob_to_torch(blob):
+    if not blob.is_tensor():
+        raise RuntimeError("Blob has to be a tensor")
+    return blob.as_tensor().to_torch()
+
+C.Blob.to_torch = _Blob_to_torch

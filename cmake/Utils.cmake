@@ -1,6 +1,6 @@
 ################################################################################################
 # Exclude and prepend functionalities
-function (exclude OUTPUT INPUT)
+function(exclude OUTPUT INPUT)
 set(EXCLUDES ${ARGN})
 foreach(EXCLUDE ${EXCLUDES})
         list(REMOVE_ITEM INPUT "${EXCLUDE}")
@@ -8,7 +8,7 @@ endforeach()
 set(${OUTPUT} ${INPUT} PARENT_SCOPE)
 endfunction(exclude)
 
-function (prepend OUTPUT PREPEND)
+function(prepend OUTPUT PREPEND)
 set(OUT "")
 foreach(ITEM ${ARGN})
         list(APPEND OUT "${PREPEND}${ITEM}")
@@ -142,7 +142,7 @@ endfunction()
 #
 function(dedent outvar text)
   # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if ("${PYTHON_EXECUTABLE}" STREQUAL "")
+  if("${PYTHON_EXECUTABLE}" STREQUAL "")
     set(_python_exe "python")
   else()
     set(_python_exe "${PYTHON_EXECUTABLE}")
@@ -167,7 +167,7 @@ endfunction()
 
 function(pycmd_no_exit outvar exitcode cmd)
   # Use PYTHON_EXECUTABLE if it is defined, otherwise default to python
-  if ("${PYTHON_EXECUTABLE}" STREQUAL "")
+  if("${PYTHON_EXECUTABLE}" STREQUAL "")
     set(_python_exe "python")
   else()
     set(_python_exe "${PYTHON_EXECUTABLE}")
@@ -226,71 +226,15 @@ function(print_target_properties tgt)
 
   # Get a list of all cmake properties TODO cache this lazily somehow
   execute_process(COMMAND cmake --help-property-list OUTPUT_VARIABLE CMAKE_PROPERTY_LIST)
-  STRING(REGEX REPLACE ";" "\\\\;" CMAKE_PROPERTY_LIST "${CMAKE_PROPERTY_LIST}")
-  STRING(REGEX REPLACE "\n" ";" CMAKE_PROPERTY_LIST "${CMAKE_PROPERTY_LIST}")
+  string(REGEX REPLACE ";" "\\\\;" CMAKE_PROPERTY_LIST "${CMAKE_PROPERTY_LIST}")
+  string(REGEX REPLACE "\n" ";" CMAKE_PROPERTY_LIST "${CMAKE_PROPERTY_LIST}")
 
-  foreach (prop ${CMAKE_PROPERTY_LIST})
+  foreach(prop ${CMAKE_PROPERTY_LIST})
     string(REPLACE "<CONFIG>" "${CMAKE_BUILD_TYPE}" prop ${prop})
     get_property(propval TARGET ${tgt} PROPERTY ${prop} SET)
-    if (propval)
+    if(propval)
       get_target_property(propval ${tgt} ${prop})
-      message ("${tgt} ${prop} = ${propval}")
+      message("${tgt} ${prop} = ${propval}")
     endif()
   endforeach(prop)
 endfunction(print_target_properties)
-
-
-###
-# Helper function to add style warning options to the given target
-# Optionally pass in the second argument ($ARGV1) which will force -Werror if
-# it evaluates to true.
-function(target_enable_style_warnings TARGET)
-  if(MSVC)
-    # TODO Also add some warning options that MSVC can understand
-    set(WARNING_OPTIONS "")
-  else()
-    set(WARNING_OPTIONS
-            -Wall
-            -Wextra
-            -Wold-style-cast
-            -Wno-missing-braces
-            -Wcast-align
-            -Wcast-qual
-            -Wctor-dtor-privacy
-            -Wdisabled-optimization
-            -Wformat=2
-            -Winit-self
-            -Wmissing-include-dirs
-            -Woverloaded-virtual
-            -Wredundant-decls
-            -Wno-shadow
-            -Wsign-promo
-            -Wno-strict-overflow
-            -fdiagnostics-show-option
-            -Wno-conversion
-            -Wpedantic
-            -Wundef
-            )
-    # -Wno-gnu-zero-variadic-macro-arguments is not available in GCC-4.8.5. Set
-    # only when using clang.
-    # Compared against https://gcc.gnu.org/onlinedocs/gcc-4.8.5/gcc/Option-Summary.html
-    if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
-      list(APPEND WARNING_OPTIONS "-Wno-gnu-zero-variadic-macro-arguments")
-    endif()
-    set(WERROR $ENV{WERROR})
-    if (${ARGC} GREATER 1)
-      # accessing ${ARGV1} is UB when ${ARGC} <= 1
-      # CMake doesn't do smart AND, so we have to use a nested `if`
-      if (${ARGV1})
-        set(WERROR TRUE)
-      endif()
-    endif()
-    if (WERROR)
-      list(APPEND WARNING_OPTIONS "-Werror")
-    endif()
-  endif()
-  if(APPLE)
-    set(WARNING_OPTIONS -Wno-gnu-zero-variadic-macro-arguments)
-  endif()
-  target_compile_options(${TARGET} PRIVATE ${WARNING_OPTIONS})
-endfunction()

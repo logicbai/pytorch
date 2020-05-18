@@ -1,11 +1,40 @@
 #pragma once
 
-#include <torch/types.h>
 #include <torch/csrc/WindowsTorchApiMacro.h>
+#include <torch/enum.h>
+#include <torch/types.h>
 
 namespace torch {
 namespace nn {
 namespace init {
+
+using NonlinearityType = c10::variant<
+  enumtype::kLinear,
+  enumtype::kConv1D,
+  enumtype::kConv2D,
+  enumtype::kConv3D,
+  enumtype::kConvTranspose1D,
+  enumtype::kConvTranspose2D,
+  enumtype::kConvTranspose3D,
+  enumtype::kSigmoid,
+  enumtype::kTanh,
+  enumtype::kReLU,
+  enumtype::kLeakyReLU
+>;
+
+using FanModeType = c10::variant<
+  enumtype::kFanIn,
+  enumtype::kFanOut
+>;
+
+} // namespace init
+} // nn
+
+namespace nn {
+namespace init {
+
+/// Return the recommended gain value for the given nonlinearity function.
+TORCH_API double calculate_gain(NonlinearityType nonlinearity, double param = 0.01);
 
 /// Fills the given `tensor` with the provided `value` in-place, and returns it.
 /// No gradient will be recorded for this operation.
@@ -51,6 +80,28 @@ TORCH_API Tensor sparse_(Tensor tensor, double sparsity, double std = 0.01);
 TORCH_API Tensor uniform_(Tensor tensor, double low = 0, double high = 1);
 
 /// Fills the input `Tensor` with values according to the method
+/// described in "Delving deep into rectifiers: Surpassing human-level
+/// performance on ImageNet classification" - He, K. et al. (2015), using a
+/// normal distribution. Also known as He initialization.
+/// No gradient will be recorded for this operation.
+TORCH_API Tensor kaiming_normal_(
+    Tensor tensor,
+    double a = 0,
+    FanModeType mode = torch::kFanIn,
+    NonlinearityType nonlinearity = torch::kLeakyReLU);
+
+/// Fills the input `Tensor` with values according to the method
+/// described in "Delving deep into rectifiers: Surpassing human-level
+/// performance on ImageNet classification" - He, K. et al. (2015), using a
+/// uniform distribution. Also known as He initialization.
+/// No gradient will be recorded for this operation.
+TORCH_API Tensor kaiming_uniform_(
+    Tensor tensor,
+    double a = 0,
+    FanModeType mode = torch::kFanIn,
+    NonlinearityType nonlinearity = torch::kLeakyReLU);
+
+/// Fills the input `Tensor` with values according to the method
 /// described in "Understanding the difficulty of training deep feedforward
 /// neural networks" - Glorot, X. & Bengio, Y. (2010). Values are scaled by the
 /// `gain` parameter. No gradient will be recorded for this operation.
@@ -66,6 +117,8 @@ TORCH_API Tensor xavier_uniform_(Tensor tensor, double gain = 1.0);
 /// Fills the given `tensor` with zeros.
 /// No gradient will be recorded for this operation.
 TORCH_API Tensor zeros_(Tensor tensor);
+
+TORCH_API std::tuple<int64_t, int64_t> _calculate_fan_in_and_fan_out(const Tensor& tensor);
 
 } // namespace init
 } // namespace nn

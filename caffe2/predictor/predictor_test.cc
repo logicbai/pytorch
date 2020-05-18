@@ -166,9 +166,9 @@ class PredictorTest : public testing::Test {
   void SetUp() override {
     DeviceOption op;
     op.set_random_seed(1701);
-    ctx_ = caffe2::make_unique<CPUContext>(op);
+    ctx_ = std::make_unique<CPUContext>(op);
     NetDef init, run;
-    p_ = caffe2::make_unique<Predictor>(
+    p_ = std::make_unique<Predictor>(
         makePredictorConfig(parseNetDef(initSpec), parseNetDef(predictSpec)));
   }
 
@@ -179,10 +179,8 @@ class PredictorTest : public testing::Test {
 TEST_F(PredictorTest, SimpleBatchSized) {
   auto inputData = randomTensor({1, 4}, ctx_.get());
   Predictor::TensorList input;
-  input.emplace_back(CPU);
   auto tensor = BlobGetMutableTensor(inputData.get(), CPU);
-  input.back().ResizeLike(*tensor);
-  input.back().ShareData(*tensor);
+  input.emplace_back(tensor->Alias());
   Predictor::TensorList output;
   (*p_)(input, &output);
   EXPECT_EQ(output.size(), 1);
@@ -195,10 +193,8 @@ TEST_F(PredictorTest, SimpleBatchSized) {
 TEST_F(PredictorTest, SimpleBatchSizedMapInput) {
   auto inputData = randomTensor({1, 4}, ctx_.get());
   Predictor::TensorMap input;
-  auto iter = input.emplace("data", Tensor(CPU));
   auto tensor = BlobGetMutableTensor(inputData.get(), CPU);
-  iter.first->second.ResizeLike(*tensor);
-  iter.first->second.ShareData(*tensor);
+  input.emplace("data", tensor->Alias());
 
   Predictor::TensorList output;
   (*p_)(input, &output);

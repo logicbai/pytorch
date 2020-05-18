@@ -1,24 +1,15 @@
 #include <ATen/cudnn/Handle.h>
-
-#include <ATen/cuda/Exceptions.h>
-
-#include <unordered_map>
-#include <mutex>
-
-// TODO: Get rid of the mutex, and just initialize these
-// handles in at::Context along with lazy CUDA initialization
+#include <ATen/cuda/detail/DeviceThreadHandles.h>
+#include <c10/cuda/CUDAStream.h>
 
 namespace at { namespace native {
-
 namespace {
 
-struct Handle {
-  cudnnHandle_t handle;
-  Handle() : handle(NULL) {
-    AT_CUDNN_CHECK(cudnnCreate(&handle));
-  }
-  ~Handle() {
-    if (handle) {
+void createCuDNNHandle(cudnnHandle_t *handle) {
+  AT_CUDNN_CHECK(cudnnCreate(handle));
+}
+
+void destroyCuDNNHandle(cudnnHandle_t handle) {
 // this is because of something dumb in the ordering of
 // destruction. Sometimes atexit, the cuda context (or something)
 // would already be destroyed by the time this gets destroyed. It
@@ -27,25 +18,32 @@ struct Handle {
 //   - @soumith
 #ifdef NO_CUDNN_DESTROY_HANDLE
 #else
-      cudnnDestroy(handle);
+    cudnnDestroy(handle);
 #endif
-    }
-  }
-};
+}
 
-std::mutex mutex;
-std::unordered_map<int, Handle> handles;
+auto pool = std::make_shared<at::cuda::DeviceThreadHandlePool<cudnnHandle_t, createCuDNNHandle, destroyCuDNNHandle>>();
 
-}  // namespace
+// Thread local PoolWindows are wrapped by unique_ptrs and lazily-initialized
+// to avoid initialization issues that caused hangs on Windows.
+// See: https://github.com/pytorch/pytorch/pull/22405
+// This thread local unique_ptrs will be destroyed when the thread terminates,
+// releasing its reserved handles back to the pool.
+thread_local std::unique_ptr<decltype(pool)::element_type::PoolWindow> myPoolWindow;
 
+} // namespace
 
 cudnnHandle_t getCudnnHandle()
 {
   int device;
   AT_CUDA_CHECK(cudaGetDevice(&device));
 
-  std::lock_guard<std::mutex> guard(mutex);
-  return handles[device].handle;
+  if (!myPoolWindow)
+    myPoolWindow.reset(pool->newPoolWindow());
+
+  auto handle = myPoolWindow->reserve(device);
+  AT_CUDNN_CHECK(cudnnSetStream(handle, c10::cuda::getCurrentCUDAStream()));
+  return handle;
 }
 
-}} // namespace at::cudnn
+}} // namespace at::native

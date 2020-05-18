@@ -2,7 +2,9 @@
 #define CAFFE2_OPERATORS_SINUSOID_POSITION_ENCODING_OP_H_
 
 #ifdef _MSC_VER
+#ifndef _USE_MATH_DEFINES
 #define _USE_MATH_DEFINES
+#endif
 #endif // _MSC_VER
 #include <cmath>
 
@@ -16,14 +18,13 @@ namespace caffe2 {
 template <class Context>
 class SinusoidPositionEncodingOp : public Operator<Context> {
  public:
-  SinusoidPositionEncodingOp(const OperatorDef& operator_def, Workspace* ws)
-      : Operator<Context>(operator_def, ws),
-        embedding_size_(this->template GetSingleArgument<int>(
-            "embedding_size",
-            100)),
+  template <class... Args>
+  explicit SinusoidPositionEncodingOp(Args&&... args)
+      : Operator<Context>(std::forward<Args>(args)...),
+        embedding_size_(
+            this->template GetSingleArgument<int>("embedding_size", 100)),
         alpha_(this->template GetSingleArgument<float>("alpha", 10000)),
-        amplitude_(
-            this->template GetSingleArgument<float>("amplitude", 1)) {}
+        amplitude_(this->template GetSingleArgument<float>("amplitude", 1)) {}
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
   bool RunOnDevice() override {

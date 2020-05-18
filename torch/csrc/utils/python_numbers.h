@@ -1,50 +1,36 @@
 #pragma once
 
+#include <torch/csrc/Exceptions.h>
+#include <torch/csrc/jit/frontend/tracer.h>
 #include <torch/csrc/python_headers.h>
+#include <torch/csrc/utils/object_ptr.h>
+#include <torch/csrc/utils/tensor_numpy.h>
 #include <cstdint>
 #include <stdexcept>
-#include <torch/csrc/Exceptions.h>
-#include <torch/csrc/utils/tensor_numpy.h>
-#include <torch/csrc/jit/tracing_state.h>
 
 // largest integer that can be represented consecutively in a double
 const int64_t DOUBLE_INT_MAX = 9007199254740992;
 
 inline PyObject* THPUtils_packInt64(int64_t value) {
-#if PY_MAJOR_VERSION == 2
-  if (sizeof(long) == sizeof(int64_t)) {
-    return PyInt_FromLong(static_cast<long>(value));
-  } else if (value <= INT32_MAX && value >= INT32_MIN) {
-    return PyInt_FromLong(static_cast<long>(value));
-  }
-#endif
   return PyLong_FromLongLong(value);
 }
 
 inline PyObject* THPUtils_packUInt64(uint64_t value) {
-#if PY_MAJOR_VERSION == 2
-  if (value <= INT32_MAX) {
-    return PyInt_FromLong(static_cast<long>(value));
-  }
-#endif
   return PyLong_FromUnsignedLongLong(value);
 }
 
 inline PyObject* THPUtils_packDoubleAsInt(double value) {
-#if PY_MAJOR_VERSION == 2
-  if (value <= INT32_MAX && value >= INT32_MIN) {
-    return PyInt_FromLong(static_cast<long>(value));
-  }
-#endif
   return PyLong_FromDouble(value);
 }
 
 inline bool THPUtils_checkLong(PyObject* obj) {
-#if PY_MAJOR_VERSION == 2
-  return (PyLong_Check(obj) || PyInt_Check(obj)) && !PyBool_Check(obj);
-#else
-  return PyLong_Check(obj) && !PyBool_Check(obj);
+#ifdef USE_NUMPY
+  if (torch::utils::is_numpy_int(obj)) {
+    return true;
+  }
 #endif
+
+  return PyLong_Check(obj) && !PyBool_Check(obj);
 }
 
 inline int64_t THPUtils_unpackLong(PyObject* obj) {
@@ -88,18 +74,32 @@ inline int64_t THPUtils_unpackIndex(PyObject* obj) {
   return THPUtils_unpackLong(obj);
 }
 
+inline bool THPUtils_unpackBool(PyObject* obj) {
+  if (obj == Py_True) {
+    return true;
+  } else if (obj == Py_False) {
+    return false;
+  } else {
+    throw std::runtime_error("couldn't convert python object to boolean");
+  }
+}
+
 inline bool THPUtils_checkDouble(PyObject* obj) {
-  bool is_numpy_scalar;
 #ifdef USE_NUMPY
-  is_numpy_scalar = torch::utils::is_numpy_scalar(obj);
-#else
-  is_numpy_scalar = false;
+  if (torch::utils::is_numpy_scalar(obj)) {
+    return true;
+  }
 #endif
-#if PY_MAJOR_VERSION == 2
-  return PyFloat_Check(obj) || PyLong_Check(obj) || PyInt_Check(obj) || is_numpy_scalar;
-#else
-  return PyFloat_Check(obj) || PyLong_Check(obj) || is_numpy_scalar;
+  return PyFloat_Check(obj) || PyLong_Check(obj);
+}
+
+inline bool THPUtils_checkScalar(PyObject* obj) {
+#ifdef USE_NUMPY
+  if (torch::utils::is_numpy_scalar(obj)) {
+    return true;
+  }
 #endif
+  return PyFloat_Check(obj) || PyLong_Check(obj) || PyComplex_Check(obj);
 }
 
 inline double THPUtils_unpackDouble(PyObject* obj) {
@@ -117,11 +117,6 @@ inline double THPUtils_unpackDouble(PyObject* obj) {
     }
     return (double)value;
   }
-#if PY_MAJOR_VERSION == 2
-  if (PyInt_Check(obj)) {
-    return (double)PyInt_AS_LONG(obj);
-  }
-#endif
   double value = PyFloat_AsDouble(obj);
   if (value == -1 && PyErr_Occurred()) {
     throw python_error();

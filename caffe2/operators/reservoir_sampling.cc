@@ -106,6 +106,13 @@ class ReservoirSamplingOp final : public Operator<Context> {
     output->ExtendTo(output_num, 50);
     if (pos_to_object) {
       pos_to_object->ExtendTo(output_num, 50);
+      // ExtendTo doesn't zero-initialize tensors any more, explicitly clear
+      // the memory
+      memset(
+          pos_to_object->template mutable_data<int64_t>() +
+              output_batch_size * sizeof(int64_t),
+          0,
+          (output_num - output_batch_size) * sizeof(int64_t));
     }
 
     auto* output_data =
@@ -254,7 +261,7 @@ This operator is thread-safe.
     .Input(
         5,
         "OBJECT_TO_POS_MAP_IN",
-        "(Optional) Auxillary bookkeeping map. This should be created from "
+        "(Optional) Auxiliary bookkeeping map. This should be created from "
         " `CreateMap` with keys of type int64 and values of type int32")
     .Input(
         6,

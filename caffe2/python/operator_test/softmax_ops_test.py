@@ -16,9 +16,9 @@ import unittest
 class TestSoftmaxOps(serial.SerializedTestCase):
 
     @serial.given(n=st.sampled_from([0, 2, 4, 71, 103]),
-           D=st.sampled_from([4, 8, 64, 79, 256, 333]),
-           engine=st.sampled_from([None, 'CUDNN']),
-           **hu.gcs)
+                  D=st.sampled_from([0, 4, 8, 64, 79, 256, 333]),
+                  engine=st.sampled_from([None, 'CUDNN']),
+                  **hu.gcs)
     def test_softmax(self, n, D, engine, gc, dc):
         # n = number of examples, D = |labels|
         # Initialize X and add 1e-2 for numerical stability
@@ -29,6 +29,10 @@ class TestSoftmaxOps(serial.SerializedTestCase):
         def label_softmax(X):
             probs = np.zeros((n, D))
             rowmax = np.zeros(n)
+
+            if D == 0:
+                return [probs]
+
             for i in range(n):
                 rowmax[i] = max(X[i, ])
                 # We need to subtract the max to avoid numerical issues
@@ -54,9 +58,9 @@ class TestSoftmaxOps(serial.SerializedTestCase):
         )
 
     @serial.given(n=st.sampled_from([0, 2, 4, 71, 103, 555, 751, 1201]),
-           D=st.sampled_from([4, 8, 64, 79, 256, 333, 1000]),
-           engine=st.sampled_from([None, 'CUDNN']),
-           **hu.gcs)
+                  D=st.sampled_from([0, 4, 8, 64, 79, 256, 333, 1000]),
+                  engine=st.sampled_from([None, 'CUDNN']),
+                  **hu.gcs)
     def test_softmax_grad(self, n, D, engine, gc, dc):
         # n = number of examples, D = |labels|
         # Initialize X and add 1e-2 for numerical stability
@@ -137,7 +141,7 @@ class TestSoftmaxOps(serial.SerializedTestCase):
             gc, op, [X], 0, [0], stepsize=1e-4, threshold=1e-2)
 
     @serial.given(n=st.integers(2, 10), D=st.integers(4, 16),
-           only_loss=st.booleans(), **hu.gcs)
+                  only_loss=st.booleans(), **hu.gcs)
     def test_softmax_with_loss(self, n, D, gc, only_loss, dc):
         # n = number of examples, D = |labels|
         # Initialize X and add 1e-2 for numerical stability
@@ -626,7 +630,7 @@ class TestSoftmaxOps(serial.SerializedTestCase):
                 "SpatialSoftmaxWithLoss",
                 ["X_gpu", "label_gpu"],
                 ["probs_gpu", "avgloss_gpu"],
-                device_option=core.DeviceOption(caffe2_pb2.CUDA, 0)
+                device_option=core.DeviceOption(workspace.GpuDeviceType, 0)
             )
 
             cpuop = core.CreateOperator(
@@ -649,7 +653,7 @@ class TestSoftmaxOps(serial.SerializedTestCase):
             # Initialize label. Some of the labels are (-1), i.e "DONT CARE"
             label = (np.random.rand(n, H, W) * (D + 1)).astype(np.int32) - 1
 
-            gpu0 = core.DeviceOption(caffe2_pb2.CUDA, 0)
+            gpu0 = core.DeviceOption(workspace.GpuDeviceType, 0)
             workspace.FeedBlob("X_cpu", X)
             workspace.FeedBlob("label_cpu", label)
             workspace.FeedBlob("X_gpu", X, device_option=gpu0)

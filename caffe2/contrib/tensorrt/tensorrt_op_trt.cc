@@ -161,7 +161,7 @@ bool TensorRTOp::RunOnDevice() {
   size_t N = 0;
   for (int i = 0; i < InputSize(); ++i) {
     const auto& input_tensor = Input(i);
-    const auto tensor_dims = input_tensor.dims();
+    const auto tensor_dims = input_tensor.sizes();
     CAFFE_ENFORCE(!tensor_dims.empty(), "Input tensor cannot be empty");
     if (i == 0) {
       N = tensor_dims.front();
@@ -178,7 +178,7 @@ bool TensorRTOp::RunOnDevice() {
   }
 
   // We need to do the binding at RunOnDevice time because we only know the
-  // exact shapes of the tensors now. In addtion, since TensorRT engine has
+  // exact shapes of the tensors now. In addition, since TensorRT engine has
   // max_batch_size, we need to call that multiple times if input batch size
   // exceeeds this limit.
   CAFFE_ENFORCE_EQ(is_input_.size(), nv_dims_.size());
@@ -198,7 +198,7 @@ bool TensorRTOp::RunOnDevice() {
         // input, check input dimensions
         const auto& input_tensor = Input(input_idx++);
         const float* input_data = input_tensor.data<float>();
-        const auto tensor_dims = input_tensor.dims();
+        const auto tensor_dims = input_tensor.sizes();
         auto chw = CheckDims(dims, tensor_dims);
         bindings.push_back((void*)(input_data + offset * chw));
       } else {

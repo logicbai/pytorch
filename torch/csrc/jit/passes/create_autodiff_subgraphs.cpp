@@ -1,11 +1,11 @@
 #include <torch/csrc/jit/passes/create_autodiff_subgraphs.h>
 
-#include <torch/csrc/jit/assertions.h>
-#include <torch/csrc/jit/autodiff.h>
-#include <torch/csrc/jit/ir.h>
-#include <torch/csrc/jit/passes/alias_analysis.h>
+#include <c10/util/Exception.h>
+#include <torch/csrc/jit/ir/alias_analysis.h>
+#include <torch/csrc/jit/ir/ir.h>
 #include <torch/csrc/jit/passes/common_subexpression_elimination.h>
 #include <torch/csrc/jit/passes/utils/subgraph_utils.h>
+#include <torch/csrc/jit/runtime/autodiff.h>
 
 namespace torch {
 namespace jit {
@@ -40,7 +40,7 @@ class SubgraphSlicer {
     bool any_changed = true;
     while (any_changed) {
       any_changed = false;
-      auto aliasDb = AliasAnalysis(graph_);
+      AliasDb aliasDb(graph_);
       for (auto it = block_->nodes().rbegin(); it != block_->nodes().rend();) {
         bool changed;
         std::tie(it, changed) = scanNode(*it, aliasDb);
@@ -71,7 +71,7 @@ class SubgraphSlicer {
       }
       curNode = prevNode;
     }
-    // Run CSE one more time to eliminate duplicates that may have occured
+    // Run CSE one more time to eliminate duplicates that may have occurred
     // while re-inlining subgraphs.
     EliminateCommonSubexpression(graph_);
   }
@@ -80,9 +80,9 @@ class SubgraphSlicer {
   // Inline this node's group subgraph into the outer graph if it's smaller
   // than the specified minimum size.
   //
-  // Returns true if an inlining has occured, false otherwise.
+  // Returns true if an inlining has occurred, false otherwise.
   bool inlineIfTooSmall(Node* n) {
-    JIT_ASSERT(n->kind() == prim::DifferentiableGraph);
+    AT_ASSERT(n->kind() == prim::DifferentiableGraph);
     auto subgraph = SubgraphUtils::getSubgraph(n);
     size_t i = 0;
     for (auto it = subgraph->nodes().begin(); it != subgraph->nodes().end();
@@ -123,7 +123,7 @@ class SubgraphSlicer {
 
   std::pair<graph_node_list::iterator, bool> scanNode(
       Node* consumer,
-      const AliasDb& aliasDb) {
+      AliasDb& aliasDb) {
     if (shouldConsiderForMerge(consumer)) {
       if (consumer->kind() != prim::DifferentiableGraph) {
         consumer = SubgraphUtils::createSingletonSubgraph(
@@ -147,10 +147,10 @@ class SubgraphSlicer {
   c10::optional<Node*> tryMerge(
       Node* consumer,
       Node* producer,
-      const AliasDb& aliasDb) {
-    JIT_ASSERT(consumer->kind() == prim::DifferentiableGraph);
+      AliasDb& aliasDb) {
+    AT_ASSERT(consumer->kind() == prim::DifferentiableGraph);
     bool canMerge = shouldConsiderForMerge(producer) &&
-        producer->moveBeforeTopologicallyValid(consumer, aliasDb);
+        aliasDb.moveBeforeTopologicallyValid(producer, consumer);
 
     if (!canMerge) {
       return c10::nullopt;
@@ -174,6 +174,5 @@ std::vector<Node*> CreateAutodiffSubgraphs(
   SubgraphSlicer(graph->block(), graph, threshold).run(diff_nodes);
   return diff_nodes;
 }
-
 } // namespace jit
 } // namespace torch

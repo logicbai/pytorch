@@ -10,6 +10,11 @@
 //
 
 #include <THC/THCReduceApplyUtils.cuh>
+#include <c10/macros/Macros.h>
+
+#ifdef __HIP_PLATFORM_HCC__
+#include <hip/hip_version.h>
+#endif
 
 // Size per each reduction block
 #define THC_REDUCE_ALL_BLOCK_SIZE 1024L
@@ -26,7 +31,7 @@ template <typename T,
           int ADims>
 __global__ void
 #if defined(__HIP_PLATFORM_HCC__)
-__launch_bounds__(THC_REDUCE_ALL_BLOCK_SIZE)
+C10_LAUNCH_BOUNDS_1(THC_REDUCE_ALL_BLOCK_SIZE)
 #endif
 kernelReduceAll(TensorInfo<T, IndexType> in,
                 IndexType totalElements,
@@ -72,6 +77,9 @@ template <typename T,
           typename ModifyOp,
           typename ReduceOp,
           int ADims>
+#if defined(__HIP_PLATFORM_HCC__)
+C10_LAUNCH_BOUNDS_1(THC_REDUCE_ALL_BLOCK_SIZE)
+#endif
 __global__ void
 kernelReduceAllPass1(TensorInfo<T, IndexType> in,
                      IndexType totalElements,
@@ -102,6 +110,9 @@ kernelReduceAllPass1(TensorInfo<T, IndexType> in,
 }
 
 template <typename T, typename ReduceOp>
+#if defined(__HIP_PLATFORM_HCC__)
+C10_LAUNCH_BOUNDS_1(THC_REDUCE_ALL_BLOCK_SIZE)
+#endif
 __global__ void
 kernelReduceAllPass2(int numPass1Blocks,
                      T init,
@@ -195,7 +206,7 @@ void callReduceAll(THCState* state,
     size_t smemSize = block.x * sizeof(AccT);
 
     kernelReduceAllPass1<T, IndexType, AccT, ModifyOp, ReduceOp, ADims>
-      <<<grid, block, smemSize, THCState_getCurrentStream(state)>>>(
+      <<<grid, block, smemSize, c10::cuda::getCurrentCUDAStream()>>>(
         in, (IndexType) totalElements, init, modifyOp, reduceOp,
         (AccT*) scratchSpace);
 
@@ -204,7 +215,7 @@ void callReduceAll(THCState* state,
     smemSize = block.x * sizeof(AccT);
 
     kernelReduceAllPass2<AccT, ReduceOp>
-      <<<grid, block, smemSize, THCState_getCurrentStream(state)>>>(
+      <<<grid, block, smemSize, c10::cuda::getCurrentCUDAStream()>>>(
         numPass1Blocks, init, reduceOp,
         (AccT*) scratchSpace, devOut);
 
@@ -214,7 +225,7 @@ void callReduceAll(THCState* state,
     size_t smemSize = block.x * sizeof(AccT);
 
     kernelReduceAll<T, IndexType, AccT, ModifyOp, ReduceOp, ADims>
-      <<<grid, block, smemSize, THCState_getCurrentStream(state)>>>(
+      <<<grid, block, smemSize, c10::cuda::getCurrentCUDAStream()>>>(
         in, (IndexType) totalElements, init, modifyOp, reduceOp, devOut);
   }
 }
@@ -298,7 +309,7 @@ bool THC_reduceAll(THCState* state,
 
     /*
     Only instantiates the all 1D special case and the fallback all nD case for
-    large (64-bit indexed) tensors to reduce compilation time. 
+    large (64-bit indexed) tensors to reduce compilation time.
     */
     if (inInfo.dims == 1) {
       HANDLE_IN_CASE(uint64_t, 1);
@@ -312,13 +323,21 @@ bool THC_reduceAll(THCState* state,
   // If our destination is not on the device, copy the value back to
   // the host (synchronous!)
   if (!outOnDevice) {
-    cudaStream_t stream = THCState_getCurrentStream(state);
+    cudaStream_t stream = c10::cuda::getCurrentCUDAStream();
+#if HIP_VERSION >= 301
+    THCudaCheck(hipMemcpyWithStream(out,
+                                    devOut,
+                                    sizeof(AccT),
+                                    cudaMemcpyDeviceToHost,
+                                    stream));
+#else
     THCudaCheck(cudaMemcpyAsync(out,
                                 devOut,
                                 sizeof(AccT),
                                 cudaMemcpyDeviceToHost,
                                 stream));
     THCudaCheck(cudaStreamSynchronize(stream));
+#endif
   }
 
   if (freeDevOut) {

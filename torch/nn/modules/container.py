@@ -6,6 +6,7 @@ import operator
 
 import torch
 from .module import Module
+from torch._jit_internal import _copy_to_script_wrapper
 
 
 class Container(Module):
@@ -61,6 +62,7 @@ class Sequential(Module):
         idx %= size
         return next(islice(iterator, idx, None))
 
+    @_copy_to_script_wrapper
     def __getitem__(self, idx):
         if isinstance(idx, slice):
             return self.__class__(OrderedDict(list(self._modules.items())[idx]))
@@ -79,16 +81,22 @@ class Sequential(Module):
             key = self._get_item_by_idx(self._modules.keys(), idx)
             delattr(self, key)
 
+    @_copy_to_script_wrapper
     def __len__(self):
         return len(self._modules)
 
+    @_copy_to_script_wrapper
     def __dir__(self):
         keys = super(Sequential, self).__dir__()
         keys = [key for key in keys if not key.isdigit()]
         return keys
 
+    @_copy_to_script_wrapper
+    def __iter__(self):
+        return iter(self._modules.values())
+
     def forward(self, input):
-        for module in self._modules.values():
+        for module in self:
             input = module(input)
         return input
 
@@ -96,8 +104,9 @@ class Sequential(Module):
 class ModuleList(Module):
     r"""Holds submodules in a list.
 
-    ModuleList can be indexed like a regular Python list, but modules it
-    contains are properly registered, and will be visible by all Module methods.
+    :class:`~torch.nn.ModuleList` can be indexed like a regular Python list, but
+    modules it contains are properly registered, and will be visible by all
+    :class:`~torch.nn.Module` methods.
 
     Arguments:
         modules (iterable, optional): an iterable of modules to add
@@ -130,6 +139,7 @@ class ModuleList(Module):
             idx += len(self)
         return str(idx)
 
+    @_copy_to_script_wrapper
     def __getitem__(self, idx):
         if isinstance(idx, slice):
             return self.__class__(list(self._modules.values())[idx])
@@ -150,15 +160,18 @@ class ModuleList(Module):
         str_indices = [str(i) for i in range(len(self._modules))]
         self._modules = OrderedDict(list(zip(str_indices, self._modules.values())))
 
+    @_copy_to_script_wrapper
     def __len__(self):
         return len(self._modules)
 
+    @_copy_to_script_wrapper
     def __iter__(self):
         return iter(self._modules.values())
 
     def __iadd__(self, modules):
         return self.extend(modules)
 
+    @_copy_to_script_wrapper
     def __dir__(self):
         keys = super(ModuleList, self).__dir__()
         keys = [key for key in keys if not key.isdigit()]
@@ -198,16 +211,31 @@ class ModuleList(Module):
             self.add_module(str(offset + i), module)
         return self
 
+    def forward(self):
+        raise NotImplementedError()
+
 
 class ModuleDict(Module):
     r"""Holds submodules in a dictionary.
 
-    ModuleDict can be indexed like a regular Python dictionary, but modules it
-    contains are properly registered, and will be visible by all Module methods.
+    :class:`~torch.nn.ModuleDict` can be indexed like a regular Python dictionary,
+    but modules it contains are properly registered, and will be visible by all
+    :class:`~torch.nn.Module` methods.
+
+    :class:`~torch.nn.ModuleDict` is an **ordered** dictionary that respects
+
+    * the order of insertion, and
+
+    * in :meth:`~torch.nn.ModuleDict.update`, the order of the merged ``OrderedDict``
+      or another :class:`~torch.nn.ModuleDict` (the argument to :meth:`~torch.nn.ModuleDict.update`).
+
+    Note that :meth:`~torch.nn.ModuleDict.update` with other unordered mapping
+    types (e.g., Python's plain ``dict``) does not preserve the order of the
+    merged mapping.
 
     Arguments:
         modules (iterable, optional): a mapping (dictionary) of (string: module)
-            or an iterable of key/value pairs of type (string, module)
+            or an iterable of key-value pairs of type (string, module)
 
     Example::
 
@@ -234,6 +262,7 @@ class ModuleDict(Module):
         if modules is not None:
             self.update(modules)
 
+    @_copy_to_script_wrapper
     def __getitem__(self, key):
         return self._modules[key]
 
@@ -243,12 +272,15 @@ class ModuleDict(Module):
     def __delitem__(self, key):
         del self._modules[key]
 
+    @_copy_to_script_wrapper
     def __len__(self):
         return len(self._modules)
 
+    @_copy_to_script_wrapper
     def __iter__(self):
         return iter(self._modules)
 
+    @_copy_to_script_wrapper
     def __contains__(self, key):
         return key in self._modules
 
@@ -267,41 +299,47 @@ class ModuleDict(Module):
         del self[key]
         return v
 
+    @_copy_to_script_wrapper
     def keys(self):
         r"""Return an iterable of the ModuleDict keys.
         """
         return self._modules.keys()
 
+    @_copy_to_script_wrapper
     def items(self):
         r"""Return an iterable of the ModuleDict key/value pairs.
         """
         return self._modules.items()
 
+    @_copy_to_script_wrapper
     def values(self):
         r"""Return an iterable of the ModuleDict values.
         """
         return self._modules.values()
 
     def update(self, modules):
-        r"""Update the ModuleDict with the key/value pairs from a mapping or
-        an iterable, overwriting existing keys.
+        r"""Update the :class:`~torch.nn.ModuleDict` with the key-value pairs from a
+        mapping or an iterable, overwriting existing keys.
+
+        .. note::
+            If :attr:`modules` is an ``OrderedDict``, a :class:`~torch.nn.ModuleDict`, or
+            an iterable of key-value pairs, the order of new elements in it is preserved.
 
         Arguments:
-            modules (iterable): a mapping (dictionary) of (string: :class:`~torch.nn.Module``) or
-                an iterable of key/value pairs of type (string, :class:`~torch.nn.Module``)
+            modules (iterable): a mapping (dictionary) from string to :class:`~torch.nn.Module`,
+                or an iterable of key-value pairs of type (string, :class:`~torch.nn.Module`)
         """
         if not isinstance(modules, container_abcs.Iterable):
             raise TypeError("ModuleDict.update should be called with an "
                             "iterable of key/value pairs, but got " +
                             type(modules).__name__)
 
-        if isinstance(modules, container_abcs.Mapping):
-            if isinstance(modules, OrderedDict):
-                for key, module in modules.items():
-                    self[key] = module
-            else:
-                for key, module in sorted(modules.items()):
-                    self[key] = module
+        if isinstance(modules, (OrderedDict, ModuleDict)):
+            for key, module in modules.items():
+                self[key] = module
+        elif isinstance(modules, container_abcs.Mapping):
+            for key, module in sorted(modules.items()):
+                self[key] = module
         else:
             for j, m in enumerate(modules):
                 if not isinstance(m, container_abcs.Iterable):
@@ -314,15 +352,19 @@ class ModuleDict(Module):
                                      "; 2 is required")
                 self[m[0]] = m[1]
 
+    def forward(self):
+        raise NotImplementedError()
+
 
 class ParameterList(Module):
     r"""Holds parameters in a list.
 
-    ParameterList can be indexed like a regular Python list, but parameters it
-    contains are properly registered, and will be visible by all Module methods.
+    :class:`~torch.nn.ParameterList` can be indexed like a regular Python
+    list, but parameters it contains are properly registered, and will be
+    visible by all :class:`~torch.nn.Module` methods.
 
     Arguments:
-        parameters (iterable, optional): an iterable of :class:`~torch.nn.Parameter`` to add
+        parameters (iterable, optional): an iterable of :class:`~torch.nn.Parameter` to add
 
     Example::
 
@@ -406,10 +448,13 @@ class ParameterList(Module):
             size_str = 'x'.join(str(size) for size in p.size())
             device_str = '' if not p.is_cuda else ' (GPU {})'.format(p.get_device())
             parastr = 'Parameter containing: [{} of size {}{}]'.format(
-                torch.typename(p.data), size_str, device_str)
+                torch.typename(p), size_str, device_str)
             child_lines.append('  (' + str(k) + '): ' + parastr)
         tmpstr = '\n'.join(child_lines)
         return tmpstr
+
+    def __call__(self, input):
+        raise RuntimeError('ParameterList should not be called.')
 
 
 class ParameterDict(Module):
@@ -418,9 +463,21 @@ class ParameterDict(Module):
     ParameterDict can be indexed like a regular Python dictionary, but parameters it
     contains are properly registered, and will be visible by all Module methods.
 
+    :class:`~torch.nn.ParameterDict` is an **ordered** dictionary that respects
+
+    * the order of insertion, and
+
+    * in :meth:`~torch.nn.ParameterDict.update`, the order of the merged ``OrderedDict``
+      or another :class:`~torch.nn.ParameterDict` (the argument to
+      :meth:`~torch.nn.ParameterDict.update`).
+
+    Note that :meth:`~torch.nn.ParameterDict.update` with other unordered mapping
+    types (e.g., Python's plain ``dict``) does not preserve the order of the
+    merged mapping.
+
     Arguments:
         parameters (iterable, optional): a mapping (dictionary) of
-            (string : :class:`~torch.nn.Parameter`) or an iterable of key,value pairs
+            (string : :class:`~torch.nn.Parameter`) or an iterable of key-value pairs
             of type (string, :class:`~torch.nn.Parameter`)
 
     Example::
@@ -492,26 +549,29 @@ class ParameterDict(Module):
         return self._parameters.values()
 
     def update(self, parameters):
-        r"""Update the ParameterDict with the key/value pairs from a mapping or
-        an iterable, overwriting existing keys.
+        r"""Update the :class:`~torch.nn.ParameterDict` with the key-value pairs from a
+        mapping or an iterable, overwriting existing keys.
+
+        .. note::
+            If :attr:`parameters` is an ``OrderedDict``, a :class:`~torch.nn.ParameterDict`, or
+            an iterable of key-value pairs, the order of new elements in it is preserved.
 
         Arguments:
-            parameters (iterable): a mapping (dictionary) of
-                (string : :class:`~torch.nn.Parameter`) or an iterable of
-                key/value pairs of type (string, :class:`~torch.nn.Parameter`)
+            parameters (iterable): a mapping (dictionary) from string to
+                :class:`~torch.nn.Parameter`, or an iterable of
+                key-value pairs of type (string, :class:`~torch.nn.Parameter`)
         """
         if not isinstance(parameters, container_abcs.Iterable):
             raise TypeError("ParametersDict.update should be called with an "
                             "iterable of key/value pairs, but got " +
                             type(parameters).__name__)
 
-        if isinstance(parameters, container_abcs.Mapping):
-            if isinstance(parameters, OrderedDict):
-                for key, parameter in parameters.items():
-                    self[key] = parameter
-            else:
-                for key, parameter in sorted(parameters.items()):
-                    self[key] = parameter
+        if isinstance(parameters, (OrderedDict, ParameterDict)):
+            for key, parameter in parameters.items():
+                self[key] = parameter
+        elif isinstance(parameters, container_abcs.Mapping):
+            for key, parameter in sorted(parameters.items()):
+                self[key] = parameter
         else:
             for j, p in enumerate(parameters):
                 if not isinstance(p, container_abcs.Iterable):
@@ -530,7 +590,10 @@ class ParameterDict(Module):
             size_str = 'x'.join(str(size) for size in p.size())
             device_str = '' if not p.is_cuda else ' (GPU {})'.format(p.get_device())
             parastr = 'Parameter containing: [{} of size {}{}]'.format(
-                torch.typename(p.data), size_str, device_str)
+                torch.typename(p), size_str, device_str)
             child_lines.append('  (' + k + '): ' + parastr)
         tmpstr = '\n'.join(child_lines)
         return tmpstr
+
+    def __call__(self, input):
+        raise RuntimeError('ParameterDict should not be called.')

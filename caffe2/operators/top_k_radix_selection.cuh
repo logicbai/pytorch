@@ -171,11 +171,7 @@ __device__ void countRadixUsingMask(CountType counts[RadixSize],
 #if defined(__HIP_PLATFORM_HCC__)
       counts[j] += __popcll(__ballot(vote));
 #else
-#if CUDA_VERSION >= 9000
       counts[j] += __popc(__ballot_sync(__activemask(), vote));
-#else
-      counts[j] += __popc(__ballot(vote));
-#endif
 #endif  // __HIP_PLATFORM_HCC__
     }
   }
@@ -218,7 +214,7 @@ __device__ DataType findPattern(DataType* smem,
   __syncthreads();
 
   // All threads participate in the loop, in order to sync on the flag
-  int numIterations = math::roundUp(sliceSize, (int) blockDim.x);
+  int numIterations = math::RoundUp(sliceSize, (int) blockDim.x);
   for (int i = threadIdx.x; i < numIterations; i += blockDim.x) {
     bool inRange = (i < sliceSize);
     DataType v = inRange ? data[i] : (DataType)0;
@@ -388,7 +384,7 @@ __global__ void gatherTopK(const T* inputPtr,
   // All threads need to participate in the loop and the prefix sum,
   // but not necessarily in the load; hence loop bounds being rounded
   // up to a multiple of the block dim.
-  int numIterations = math::roundUp(inputSliceSize, (int) blockDim.x);
+  int numIterations = math::RoundUp(inputSliceSize, (int) blockDim.x);
   int writeIndexStart = 0;
 
   for (int i = threadIdx.x; i < numIterations; i += blockDim.x) {

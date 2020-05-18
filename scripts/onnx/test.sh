@@ -23,7 +23,8 @@ do
 done
 set -- "${UNKNOWN[@]}" # leave UNKNOWN
 
-pip install pytest scipy torchvision
+pip install pytest scipy hypothesis
+
 if [[ $PARALLEL == 1 ]]; then
     pip install pytest-xdist
 fi
@@ -35,8 +36,42 @@ test_paths=(
     "$top_dir/test/onnx"
 )
 
+args=()
+args+=("-v")
 if [[ $PARALLEL == 1 ]]; then
-    pytest -n 3 "${test_paths[@]}"
-else
-    pytest "${test_paths[@]}"
+  args+=("-n")
+  args+=("3")
+fi
+
+# Skipped tests
+args+=("-k")
+args+=('not (TestOperators and test_full_like) and not (TestOperators and test_zeros_like) and not (TestOperators and test_ones_like) and not (TestModels and test_vgg16) and not (TestModels and test_vgg16_bn) and not (TestModels and test_vgg19) and not (TestModels and test_vgg19_bn)')
+
+# These exclusions are for tests that take a long time / a lot of GPU
+# memory to run; they should be passing (and you will test them if you
+# run them locally
+pytest "${args[@]}" \
+  --ignore "$top_dir/test/onnx/test_pytorch_onnx_onnxruntime.py" \
+  --ignore "$top_dir/test/onnx/test_custom_ops.py" \
+  --ignore "$top_dir/test/onnx/test_models_onnxruntime.py" \
+  --ignore "$top_dir/test/onnx/test_utility_funs.py" \
+  "${test_paths[@]}"
+
+# onnxruntime only support py3
+# "Python.h" not found in py2, needed by TorchScript custom op compilation.
+if [[ "$BUILD_ENVIRONMENT" == *ort1-py3.6* ]]; then
+  pytest "${args[@]}" \
+    "$top_dir/test/onnx/test_pytorch_onnx_onnxruntime.py::TestONNXRuntime_opset7" \
+    "$top_dir/test/onnx/test_pytorch_onnx_onnxruntime.py::TestONNXRuntime_opset8" \
+    "$top_dir/test/onnx/test_pytorch_onnx_onnxruntime.py::TestONNXRuntime" \
+    "$top_dir/test/onnx/test_custom_ops.py" \
+    "$top_dir/test/onnx/test_models_onnxruntime.py" \
+    "$top_dir/test/onnx/test_utility_funs.py"
+fi
+if [[ "$BUILD_ENVIRONMENT" == *ort2-py3.6* ]]; then
+  # Update the loop for new opsets
+  for i in $(seq 10 12); do
+    pytest "${args[@]}" \
+      "$top_dir/test/onnx/test_pytorch_onnx_onnxruntime.py::TestONNXRuntime_opset$i"
+  done
 fi

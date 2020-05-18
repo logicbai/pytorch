@@ -130,10 +130,9 @@ class BinaryElementwiseWithArgsGradientOp<
  public:
   USE_OPERATOR_FUNCTIONS(CPUContext);
 
-  BinaryElementwiseWithArgsGradientOp(
-      const OperatorDef& operator_def,
-      Workspace* ws)
-      : Operator<CPUContext>(operator_def, ws),
+  template <class... Args>
+  explicit BinaryElementwiseWithArgsGradientOp(Args&&... args)
+      : Operator<CPUContext>(std::forward<Args>(args)...),
         OP_SINGLE_ARG(bool, "broadcast", legacy_broadcast_, false),
         OP_SINGLE_ARG(int, "axis", axis_, -1),
         OP_SINGLE_ARG(string, "axis_str", axis_str_, ""),
@@ -144,12 +143,12 @@ class BinaryElementwiseWithArgsGradientOp<
         // Get axis from an explicit axis argument.
         CAFFE_ENFORCE_EQ(
             axis_str_.size(),
-            0,
+            0U,
             "Args axis and axis_str cannot be used simultaneously.");
       } else if (axis_str_.size()) {
         // Get the axis index semantically.
         CAFFE_ENFORCE_EQ(
-            axis_str_.size(), 1, "Unsupported axis string", axis_str_);
+            axis_str_.size(), 1U, "Unsupported axis string", axis_str_);
         const size_t semantic_axis_ = order_.find(axis_str_);
         CAFFE_ENFORCE_NE(
             semantic_axis_,
@@ -179,8 +178,8 @@ class BinaryElementwiseWithArgsGradientOp<
     const T* C_data = nullptr;
     std::vector<int> A_dims;
     std::vector<int> B_dims;
-    at::IntList dA_sizes;
-    at::IntList dB_sizes;
+    at::IntArrayRef dA_sizes;
+    at::IntArrayRef dB_sizes;
     if (InputSize() == 3) {
       const auto& B = Input(0);
       const auto& C = Input(1);
